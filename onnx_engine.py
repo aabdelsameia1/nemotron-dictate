@@ -40,6 +40,77 @@ def _strip_tags(t: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+#  Pure-numpy STFT + Slaney mel filterbank (no librosa -> no pooch/lzma).      #
+#  Bit-equivalent to librosa.stft / librosa.filters.mel(norm='slaney').        #
+# --------------------------------------------------------------------------- #
+def _hz_to_mel_slaney(freq):
+    freq = np.asarray(freq, dtype=np.float64)
+    f_min, f_sp = 0.0, 200.0 / 3
+    mels = (freq - f_min) / f_sp
+    min_log_hz, min_log_mel = 1000.0, (1000.0 - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+    log_t = freq >= min_log_hz
+    mels = np.where(log_t, min_log_mel + np.log(freq / min_log_hz) / logstep, mels)
+    return mels
+
+
+def _mel_to_hz_slaney(mels):
+    mels = np.asarray(mels, dtype=np.float64)
+    f_min, f_sp = 0.0, 200.0 / 3
+    freqs = f_min + f_sp * mels
+    min_log_hz, min_log_mel = 1000.0, (1000.0 - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+    log_t = mels >= min_log_mel
+    freqs = np.where(log_t, min_log_hz * np.exp(logstep * (mels - min_log_mel)), freqs)
+    return freqs
+
+
+def _slaney_mel_filterbank(sr, n_fft, n_mels, fmin=0.0, fmax=None):
+    """Replicates librosa.filters.mel(htk=False, norm='slaney')."""
+    if fmax is None:
+        fmax = sr / 2
+    n_freqs = int(1 + n_fft // 2)
+    fftfreqs = np.linspace(0, sr / 2, n_freqs)
+    mel_min, mel_max = _hz_to_mel_slaney(fmin), _hz_to_mel_slaney(fmax)
+    mel_pts = np.linspace(mel_min, mel_max, n_mels + 2)
+    freq_pts = _mel_to_hz_slaney(mel_pts)
+    fdiff = np.diff(freq_pts)
+    ramps = freq_pts[:, None] - fftfreqs[None, :]
+    weights = np.zeros((n_mels, n_freqs))
+    for i in range(n_mels):
+        lower = -ramps[i] / fdiff[i]
+        upper = ramps[i + 2] / fdiff[i + 1]
+        weights[i] = np.maximum(0, np.minimum(lower, upper))
+    # Slaney normalization: area-normalize each filter
+    enorm = 2.0 / (freq_pts[2:n_mels + 2] - freq_pts[:n_mels])
+    weights *= enorm[:, None]
+    return weights
+
+
+def _stft(y, n_fft, hop, win_length, window):
+    """Replicates librosa.stft(center=True, pad_mode='reflect') magnitude path.
+    window (win_length) is centered & zero-padded to n_fft."""
+    # center-pad the window to n_fft
+    if win_length < n_fft:
+        pad_l = (n_fft - win_length) // 2
+        win = np.zeros(n_fft, dtype=np.float64)
+        win[pad_l:pad_l + win_length] = window
+    else:
+        win = window.astype(np.float64)
+    # reflect-pad the signal by n_fft//2 on both sides (center=True)
+    pad = n_fft // 2
+    yp = np.pad(y.astype(np.float64), pad, mode="reflect")
+    # frame
+    n_frames = 1 + (len(yp) - n_fft) // hop
+    if n_frames <= 0:
+        return np.zeros((1 + n_fft // 2, 0), dtype=np.complex128)
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+    frames = yp[idx] * win[None, :]            # [n_frames, n_fft]
+    spec = np.fft.rfft(frames, n=n_fft, axis=1).T  # [n_freqs, n_frames]
+    return spec
+
+
+# --------------------------------------------------------------------------- #
 #  NeMo-matching log-mel frontend (AudioToMelSpectrogramPreprocessor defaults) #
 # --------------------------------------------------------------------------- #
 class MelFrontend:
@@ -51,7 +122,6 @@ class MelFrontend:
     exact_pad uses n_fft//2 reflect). We validate against ground-truth transcripts.
     """
     def __init__(self, cfg):
-        import librosa
         self.sr = cfg["sample_rate"]
         self.preemph = cfg["preprocessor"]["preemph"]
         self.n_fft = cfg["preprocessor"]["n_fft"]
@@ -63,11 +133,11 @@ class MelFrontend:
         # NeMo uses torch.hann_window(win_length, periodic=False) == symmetric Hann.
         # np.hanning(N) is the symmetric (periodic=False) window -> matches.
         self.window = np.hanning(self.win_length).astype(np.float32)
-        # mel filterbank: NeMo uses librosa.filters.mel defaults (htk=False, norm='slaney')
-        self.mel_fb = librosa.filters.mel(
-            sr=self.sr, n_fft=self.n_fft, n_mels=self.n_mels, fmin=0.0, fmax=self.sr / 2
-        ).astype(np.float32)
-        self._librosa = librosa
+        # Slaney-normalized mel filterbank (numpy; matches librosa.filters.mel defaults
+        # htk=False, norm='slaney'). Computed in-house so the packaged app does NOT need
+        # librosa (which drags in pooch -> lzma and bloats/breaks the bundle).
+        self.mel_fb = _slaney_mel_filterbank(
+            self.sr, self.n_fft, self.n_mels, fmin=0.0, fmax=self.sr / 2).astype(np.float32)
 
     def __call__(self, audio: np.ndarray) -> np.ndarray:
         """audio: float32 mono 16k -> mel features [1, n_mels, T] (numpy float32)."""
@@ -77,11 +147,8 @@ class MelFrontend:
         # preemphasis: y[t] = x[t] - 0.97 * x[t-1]  (NeMo applies on the whole signal)
         if self.preemph and self.preemph != 0.0:
             x = np.concatenate([x[:1], x[1:] - self.preemph * x[:-1]])
-        # STFT magnitude^2 (power). NeMo: center=True, reflect pad, win padded to n_fft.
-        stft = self._librosa.stft(
-            x, n_fft=self.n_fft, hop_length=self.hop, win_length=self.win_length,
-            window=self.window, center=True, pad_mode="reflect",
-        )
+        # STFT power spectrum (center=True, reflect pad), window padded to n_fft.
+        stft = _stft(x, self.n_fft, self.hop, self.win_length, self.window)
         power = (np.abs(stft) ** 2).astype(np.float32)          # [n_fft/2+1, T]
         mel = self.mel_fb @ power                                # [n_mels, T]
         mel = np.log(mel + self.log_guard).astype(np.float32)

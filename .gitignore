@@ -4,6 +4,12 @@ onnx_weights/
 *.nemo
 *.onnx
 
+# py2app build artifacts (big — rebuild from app/build_app.py)
+build/
+dist/
+*.app
+*.dmg
+
 # Python env
 .venv/
 __pycache__/
