@@ -1,6 +1,8 @@
 # Model weights / HF cache — huge, never commit
 weights/
+onnx_weights/
 *.nemo
+*.onnx
 
 # Python env
 .venv/

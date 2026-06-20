@@ -41,8 +41,9 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 import numpy as np
 import sounddevice as sd
 
-from stream_engine import StreamingTranscriber, MODEL_SR
 from live_inject import LiveTyper, diff_plan
+
+MODEL_SR = 16000   # both engines use 16kHz mono (engine class is chosen in main)
 
 import rumps
 from pynput import keyboard
@@ -296,10 +297,11 @@ class StreamMic:
 
 
 class LiveDictateApp(rumps.App):
-    def __init__(self, trigger="f18", device="mps", lang="auto", duck=True):
+    def __init__(self, trigger="f18", device="mps", lang="auto", duck=True, engine_cls=None):
         super().__init__(ICON["loading"], quit_button=None)
         self.trigger_name = trigger
         self.device = device
+        self._engine_cls = engine_cls
         _s = _load_settings()                      # remember language + duck across restarts
         self.lang = _s.get("lang", lang)
         self.duck_enabled = _s.get("duck", duck)
@@ -360,7 +362,7 @@ class LiveDictateApp(rumps.App):
     # ---- model load / unload ----
     def _load(self):
         try:
-            self.engine = StreamingTranscriber(device=self.device, lang=self.lang)
+            self.engine = self._engine_cls(device=self.device, lang=self.lang)
             with self._lock:
                 if self._status in ("loading",):
                     self._status = "idle"
@@ -543,7 +545,7 @@ class LiveDictateApp(rumps.App):
         os._exit(0)
 
 
-def selftest(wav, device, lang):
+def selftest(wav, device, lang, engine_cls):
     """Headless integration check: stream a wav through engine+typer DIFF (no keyboard,
     no mic). Confirms growing text correct and backspaces (~0)."""
     import soundfile as sf
@@ -552,7 +554,7 @@ def selftest(wav, device, lang):
         audio = audio.mean(axis=1)
     if sr != MODEL_SR:
         audio = _resample_linear(audio, sr, MODEL_SR)
-    eng = StreamingTranscriber(device=device, lang=lang)
+    eng = engine_cls(device=device, lang=lang)
     eng.reset()
     committed, total_back = "", 0
     for i in range(0, len(audio), CHUNK_SAMPLES):
@@ -570,19 +572,28 @@ def selftest(wav, device, lang):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--engine", default="onnx", choices=["onnx", "nemo"],
+                    help="onnx = ~2s load, CPU, frees the GPU (default); nemo = MPS, best accuracy")
     ap.add_argument("--trigger", default="f18", help="pynput Key name (default f18 from Karabiner)")
-    ap.add_argument("--device", default="mps", choices=["mps", "cpu"])
+    ap.add_argument("--device", default=None, choices=["mps", "cpu"], help="override the engine's default device")
     ap.add_argument("--lang", default="auto")
     ap.add_argument("--no-duck", action="store_true", help="disable audio ducking")
     ap.add_argument("--selftest", metavar="WAV", help="headless engine+typer check, no GUI")
     args = ap.parse_args()
 
+    if args.engine == "onnx":
+        from onnx_engine import StreamingTranscriber as EngineCls
+        device = args.device or "cpu"
+    else:
+        from stream_engine import StreamingTranscriber as EngineCls
+        device = args.device or "mps"
+
     if args.selftest:
-        selftest(args.selftest, args.device, args.lang)
+        selftest(args.selftest, device, args.lang, EngineCls)
         return
 
-    LiveDictateApp(trigger=args.trigger, device=args.device, lang=args.lang,
-                   duck=not args.no_duck).run()
+    LiveDictateApp(trigger=args.trigger, device=device, lang=args.lang,
+                   duck=not args.no_duck, engine_cls=EngineCls).run()
 
 
 if __name__ == "__main__":

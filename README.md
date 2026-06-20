@@ -35,6 +35,19 @@ uv venv && uv pip install -r requirements.txt    # NeMo is installed from git (s
 ./.venv/bin/python run.py --audio some.wav --lang fr-FR --device mps --out out.txt
 ```
 
+## Engines (pick with `--engine`)
+| Engine | Default? | Load | Device | Accuracy | Notes |
+|---|---|---|---|---|---|
+| **onnx** | ✅ default | **~2s** | CPU | identical on short utterances, ~99% long | frees the GPU → run it alongside GPU apps (HyperRead) with no conflict |
+| **nemo** | `--engine nemo` | ~20s | MPS | slightly higher (long files) | the original PyTorch/NeMo path; best for long-form / max accuracy |
+
+```bash
+./.venv/bin/python live_dictate.py                 # onnx (fast, CPU) — default
+./.venv/bin/python live_dictate.py --engine nemo   # NeMo (MPS, max accuracy)
+```
+ONNX weights (gitignored, ~2.4 GB) live in `onnx_weights/` — download the export
+`altunenes/parakeet-rs :: nemotron-3.5-asr-streaming-0.6b-onnx` from Hugging Face into that folder.
+
 See **[DICTATION_SETUP.md](DICTATION_SETUP.md)** for the full setup (Karabiner remap,
 turning off Apple dictation, permissions, always-on LaunchAgent).
 
@@ -42,7 +55,8 @@ turning off Apple dictation, permissions, always-on LaunchAgent).
 | File | What |
 |---|---|
 | `live_dictate.py` | the main app — real-time streaming + pill + ducking + pause |
-| `stream_engine.py` | cache-aware streaming core (`StreamingTranscriber`) |
+| `stream_engine.py` | NeMo cache-aware streaming engine (`StreamingTranscriber`, MPS) |
+| `onnx_engine.py` | ONNX Runtime streaming engine — same model, CPU, ~2s load (default) |
 | `live_inject.py` | delta-typer (diffs growing text → minimal keystrokes) |
 | `menubar_dictate.py` | older batch app (tap-record-then-paste) |
 | `dictate.py` | push-to-talk daemon + shared recorder/model/inject |
