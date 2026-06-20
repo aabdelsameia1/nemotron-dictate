@@ -109,6 +109,8 @@ class FloatingIndicator:
 
     def _build(self):
         from AppKit import (NSPanel, NSColor, NSScreen, NSTextField, NSFont, NSView,
+                            NSVisualEffectView, NSVisualEffectMaterialHUDWindow,
+                            NSVisualEffectBlendingModeBehindWindow, NSVisualEffectStateActive,
                             NSWindowStyleMaskBorderless, NSWindowStyleMaskNonactivatingPanel,
                             NSBackingStoreBuffered, NSMakeRect)
         # status-window level so it floats above everything
@@ -133,14 +135,16 @@ class FloatingIndicator:
         panel.setHasShadow_(True)
         panel.setCollectionBehavior_((1 << 0) | (1 << 8))  # AllSpaces | FullScreenAuxiliary
 
-        # solid dark rounded pill (guaranteed visible). Glass upgrade after placement is confirmed.
-        content = panel.contentView()
-        content.setWantsLayer_(True)
-        lyr = content.layer()
-        lyr.setCornerRadius_(h / 2.0)
-        lyr.setMasksToBounds_(True)
-        lyr.setBackgroundColor_(
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.07, 0.07, 0.08, 0.93).CGColor())
+        # frosted-glass pill (Apple Dynamic-Island vibrancy). HUD material = dark + translucent.
+        effect = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
+        effect.setMaterial_(NSVisualEffectMaterialHUDWindow)
+        effect.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
+        effect.setState_(NSVisualEffectStateActive)
+        effect.setWantsLayer_(True)
+        effect.layer().setCornerRadius_(h / 2.0)
+        effect.layer().setMasksToBounds_(True)
+        panel.setContentView_(effect)
+        content = effect
 
         dot = NSView.alloc().initWithFrame_(NSMakeRect(13, (h - 7) / 2.0, 7, 7))
         dot.setWantsLayer_(True)
