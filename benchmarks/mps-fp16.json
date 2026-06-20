@@ -1,0 +1,33 @@
+{
+  "pass": "mps-fp16",
+  "timestamp": "2026-06-20T11:27:59",
+  "config": {
+    "device": "mps",
+    "dtype": "fp16",
+    "batch_size": 1,
+    "num_workers": 0,
+    "iters": 3,
+    "audio": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/assets/test_en.wav",
+    "lang": "en-US",
+    "audio_dur_s": 5.446
+  },
+  "metrics": {
+    "model_load_s": 19.97,
+    "wall_clock_best_s": 0.274,
+    "wall_clock_mean_s": 0.37,
+    "all_times_s": [
+      0.279,
+      0.274,
+      0.557
+    ],
+    "rtf_best": 0.0503,
+    "peak_ram_gb": 1.66,
+    "peak_mps_mem_gb": 2.58
+  },
+  "quality": {
+    "output": [
+      "The quick brown fox jumps over the lazy dog speech recognition on Apple Silicon is working. <en-US>"
+    ],
+    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-mps-fp16/transcript.txt"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "pass": "long-mps-fp16",
+  "timestamp": "2026-06-20T11:29:53",
+  "config": {
+    "device": "mps",
+    "dtype": "fp16",
+    "batch_size": 1,
+    "num_workers": 0,
+    "iters": 3,
+    "audio": "assets/test_long.wav",
+    "lang": "en-US",
+    "audio_dur_s": 37.995
+  },
+  "metrics": {
+    "model_load_s": 20.05,
+    "wall_clock_best_s": 0.791,
+    "wall_clock_mean_s": 0.89,
+    "all_times_s": [
+      0.791,
+      0.806,
+      1.074
+    ],
+    "rtf_best": 0.0208,
+    "peak_ram_gb": 1.66,
+    "peak_mps_mem_gb": 2.58
+  },
+  "quality": {
+    "output": [
+      "Artificial intelligence has transformed the way we interact with technology, speech recognition systems can now transcribe human speech with remarkable accuracy across dozens of languages. <en-US> This model runs entirely on Apple Silicon using the metal performance shader's backend. <en-US> No cloud connection is required, and no audio ever leaves the machine. <en-US> The cache aware streaming architecture processes each frame of audio exactly once, which makes it both fast and efficient whether you are transcribing a meeting, a lecture, or a podcast, the results are consistently strong. <en-US> Privacy is preserved because everything happens locally on your own device. <en-US>"
+    ],
+    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-long-mps-fp16/transcript.txt"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "pass": "mps-fp32",
+  "timestamp": "2026-06-20T11:27:22",
+  "config": {
+    "device": "mps",
+    "dtype": "fp32",
+    "batch_size": 1,
+    "num_workers": 0,
+    "iters": 3,
+    "audio": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/assets/test_en.wav",
+    "lang": "en-US",
+    "audio_dur_s": 5.446
+  },
+  "metrics": {
+    "model_load_s": 19.95,
+    "wall_clock_best_s": 0.281,
+    "wall_clock_mean_s": 0.389,
+    "all_times_s": [
+      0.288,
+      0.281,
+      0.599
+    ],
+    "rtf_best": 0.0516,
+    "peak_ram_gb": 1.65,
+    "peak_mps_mem_gb": 2.59
+  },
+  "quality": {
+    "output": [
+      "The quick brown fox jumps over the lazy dog speech recognition on Apple Silicon is working. <en-US>"
+    ],
+    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-mps-fp32/transcript.txt"
+  }
+}

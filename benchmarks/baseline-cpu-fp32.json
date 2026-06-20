@@ -1,0 +1,33 @@
+{
+  "pass": "baseline-cpu-fp32",
+  "timestamp": "2026-06-20T11:26:43",
+  "config": {
+    "device": "cpu",
+    "dtype": "fp32",
+    "batch_size": 1,
+    "num_workers": 0,
+    "iters": 3,
+    "audio": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/assets/test_en.wav",
+    "lang": "en-US",
+    "audio_dur_s": 5.446
+  },
+  "metrics": {
+    "model_load_s": 20.13,
+    "wall_clock_best_s": 1.202,
+    "wall_clock_mean_s": 1.304,
+    "all_times_s": [
+      1.202,
+      1.202,
+      1.509
+    ],
+    "rtf_best": 0.2207,
+    "peak_ram_gb": 4.13,
+    "peak_mps_mem_gb": null
+  },
+  "quality": {
+    "output": [
+      "The quick brown fox jumps over the lazy dog speech recognition on Apple Silicon is working. <en-US>"
+    ],
+    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-baseline-cpu-fp32/transcript.txt"
+  }
+}

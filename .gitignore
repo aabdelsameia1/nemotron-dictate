@@ -1,0 +1,16 @@
+# Model weights / HF cache — huge, never commit
+weights/
+*.nemo
+
+# Python env
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime output
+logs/
+*.log
+outputs/
+
+# macOS
+.DS_Store
