@@ -31,6 +31,8 @@ import gc
 import threading
 import argparse
 import subprocess
+import json
+from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -50,6 +52,23 @@ CHUNK_MS = 320
 CHUNK_SAMPLES = MODEL_SR * CHUNK_MS // 1000
 MAX_LISTEN_SECONDS = 120
 DUCK_TO_PERCENT = 0.20   # lower other audio to 20% of current while recording
+
+SETTINGS_PATH = Path.home() / "Library/Application Support/NemotronDictate/config.json"
+
+
+def _load_settings():
+    try:
+        return json.loads(SETTINGS_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _save_settings(d):
+    try:
+        SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_PATH.write_text(json.dumps(d, indent=2))
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +142,7 @@ class FloatingIndicator:
         f = screen.frame()
         vf = screen.visibleFrame()                 # excludes the menu bar / notch row
         w, h = 128.0, 24.0
+        self._w, self._h = w, h
         x = f.origin.x + (f.size.width - w) / 2.0  # centered on full width → under the notch
         y = vf.origin.y + vf.size.height - h - 7.0 # hang just BELOW the menu bar (notch can't draw)
         style = NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
@@ -166,10 +186,33 @@ class FloatingIndicator:
 
         self._panel, self._dot = panel, dot
 
+    def _screen_for_mouse(self):
+        """The screen the cursor is on — so the pill shows where you're working."""
+        from AppKit import NSEvent, NSScreen
+        try:
+            loc = NSEvent.mouseLocation()
+            for s in NSScreen.screens():
+                fr = s.frame()
+                if (fr.origin.x <= loc.x <= fr.origin.x + fr.size.width and
+                        fr.origin.y <= loc.y <= fr.origin.y + fr.size.height):
+                    return s
+        except Exception:
+            pass
+        return self._notch_screen()
+
+    def _position(self, screen):
+        f = screen.frame()
+        vf = screen.visibleFrame()
+        w, h = self._w, self._h
+        x = f.origin.x + (f.size.width - w) / 2.0
+        y = vf.origin.y + vf.size.height - h - 7.0
+        self._panel.setFrame_display_(((x, y), (w, h)), True)
+
     def show(self):
         try:
             if self._panel is None:
                 self._build()
+            self._position(self._screen_for_mouse())   # follow the active screen
             self._panel.orderFrontRegardless()
         except Exception as e:
             print(f"[live] indicator show failed (non-fatal): {e!r}", flush=True)
@@ -257,8 +300,9 @@ class LiveDictateApp(rumps.App):
         super().__init__(ICON["loading"], quit_button=None)
         self.trigger_name = trigger
         self.device = device
-        self.lang = lang
-        self.duck_enabled = duck
+        _s = _load_settings()                      # remember language + duck across restarts
+        self.lang = _s.get("lang", lang)
+        self.duck_enabled = _s.get("duck", duck)
 
         self._status = "loading"
         self._lock = threading.Lock()
@@ -304,19 +348,31 @@ class LiveDictateApp(rumps.App):
 
     def _set_lang(self, sender):
         self.lang = sender.title
+        _save_settings({"lang": self.lang, "duck": self.duck_enabled})
         rumps.notification("Nemotron Dictation", "Language",
                            f"Set to {self.lang} — Pause then Resume to apply.")
 
     def _toggle_duck(self, sender):
         self.duck_enabled = not self.duck_enabled
         sender.state = 1 if self.duck_enabled else 0
+        _save_settings({"lang": self.lang, "duck": self.duck_enabled})
 
     # ---- model load / unload ----
     def _load(self):
-        self.engine = StreamingTranscriber(device=self.device, lang=self.lang)
-        with self._lock:
-            if self._status in ("loading",):
-                self._status = "idle"
+        try:
+            self.engine = StreamingTranscriber(device=self.device, lang=self.lang)
+            with self._lock:
+                if self._status in ("loading",):
+                    self._status = "idle"
+        except Exception as e:
+            print(f"[live] model load failed: {e!r}", flush=True)
+            try:
+                rumps.notification("Nemotron Dictation", "Model failed to load", str(e)[:140])
+            except Exception:
+                pass
+            with self._lock:
+                self._status = "paused"
+            self.pause_item.title = "Resume (reload model)"
 
     def _toggle_pause(self, _):
         with self._lock:
@@ -406,6 +462,10 @@ class LiveDictateApp(rumps.App):
             self.mic.start()
         except Exception as e:
             print(f"[live] start failed: {e!r}", flush=True)
+            try:
+                rumps.notification("Nemotron Dictation", "Microphone error", str(e)[:140])
+            except Exception:
+                pass
             return
         if self.duck_enabled:
             self._saved_vol = _get_output_volume()

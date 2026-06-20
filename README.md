@@ -9,10 +9,11 @@ Tap your mic key → speak → words stream into whatever app is focused, **live
 ## Features
 - **Real-time streaming** transcription (cache-aware NeMo, ~0.11 RTF on MPS — 4–9× real-time)
 - **Pure-append** output → live typing with zero backspacing/glitches
-- **Floating indicator** — a pill under the notch while recording
+- **Floating indicator** — a glass pill under the notch, on whichever screen you're using
 - **Audio ducking** — lowers other apps' volume while you talk, fades it back gently
 - **Pause / Resume** — unloads the model (GPU → 0 MB) to free the GPU for other work
-- **Menu-bar app**, runs from a LaunchAgent so it loads once at login (no terminal)
+- **Remembers settings** (language, ducking) across restarts; **error popups** on mic/model failure
+- **Menu-bar app**, runs from a LaunchAgent so it loads once at login (no terminal) + auto-restarts on crash
 
 ## Requirements
 - Apple Silicon Mac, macOS 13+
