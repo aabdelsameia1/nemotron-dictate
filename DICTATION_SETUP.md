@@ -24,7 +24,7 @@ Older files: `menubar_dictate.py` (batch, tap-to-record-then-paste), `run.py` (f
 
 ## Run it
 ```bash
-cd ~/Desktop/ai-models/nemotron-asr
+cd ~/apps/nemotron-dictate
 # production (after restart: F5 → F18 via Karabiner):
 ./.venv/bin/python live_dictate.py
 # testing before the restart (uses Right Option as the trigger):

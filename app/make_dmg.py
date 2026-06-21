@@ -2,7 +2,7 @@
 """
 Package dist/Nemotron Dictate.app into dist/Nemotron Dictate.dmg.
 
-    cd ~/Desktop/ai-models/nemotron-asr
+    cd ~/apps/nemotron-dictate
     source .venv/bin/activate
     python app/build_app.py     # builds the .app first
     python app/make_dmg.py      # -> dist/Nemotron Dictate.dmg

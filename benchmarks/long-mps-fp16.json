@@ -28,6 +28,6 @@
     "output": [
       "Artificial intelligence has transformed the way we interact with technology, speech recognition systems can now transcribe human speech with remarkable accuracy across dozens of languages. <en-US> This model runs entirely on Apple Silicon using the metal performance shader's backend. <en-US> No cloud connection is required, and no audio ever leaves the machine. <en-US> The cache aware streaming architecture processes each frame of audio exactly once, which makes it both fast and efficient whether you are transcribing a meeting, a lecture, or a podcast, the results are consistently strong. <en-US> Privacy is preserved because everything happens locally on your own device. <en-US>"
     ],
-    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-long-mps-fp16/transcript.txt"
+    "output_path": "/Users/abdallah.abdelsameia/apps/nemotron-dictate/outputs/pass-long-mps-fp16/transcript.txt"
   }
 }

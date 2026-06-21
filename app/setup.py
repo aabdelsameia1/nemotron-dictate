@@ -2,7 +2,7 @@
 py2app build script for Nemotron Dictate (ONNX-only menu-bar dictation app).
 
 Build:
-    cd ~/Desktop/ai-models/nemotron-asr
+    cd ~/apps/nemotron-dictate
     source .venv/bin/activate
     python app/setup.py py2app            # -> dist/Nemotron Dictate.app
     # (alias/dev mode for fast iteration):

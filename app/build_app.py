@@ -2,7 +2,7 @@
 """
 Repeatable build for Nemotron Dictate.app.
 
-    cd ~/Desktop/ai-models/nemotron-asr
+    cd ~/apps/nemotron-dictate
     source .venv/bin/activate
     python app/build_app.py
 

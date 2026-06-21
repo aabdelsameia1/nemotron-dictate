@@ -7,7 +7,7 @@
     "batch_size": 1,
     "num_workers": 0,
     "iters": 3,
-    "audio": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/assets/test_en.wav",
+    "audio": "/Users/abdallah.abdelsameia/apps/nemotron-dictate/assets/test_en.wav",
     "lang": "en-US",
     "audio_dur_s": 5.446
   },
@@ -28,6 +28,6 @@
     "output": [
       "The quick brown fox jumps over the lazy dog speech recognition on Apple Silicon is working. <en-US>"
     ],
-    "output_path": "/Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/outputs/pass-mps-fp16/transcript.txt"
+    "output_path": "/Users/abdallah.abdelsameia/apps/nemotron-dictate/outputs/pass-mps-fp16/transcript.txt"
   }
 }

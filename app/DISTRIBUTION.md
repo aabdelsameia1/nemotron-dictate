@@ -20,7 +20,7 @@ The bundle's entry class is `PackagedLiveDictateApp(LiveDictateApp)` (adds first
 
 ## Build (developer)
 ```bash
-cd ~/Desktop/ai-models/nemotron-asr
+cd ~/apps/nemotron-dictate
 source .venv/bin/activate
 python app/build_app.py     # icon -> clean -> py2app -> ad-hoc codesign  => dist/Nemotron Dictate.app
 python app/make_dmg.py      # => dist/Nemotron Dictate.dmg
@@ -31,7 +31,7 @@ Apple Developer ID. That makes it launchable locally; see Gatekeeper note below.
 Headless smoke test (no mic, transcribes a WAV) to verify the bundle works:
 ```bash
 "dist/Nemotron Dictate.app/Contents/MacOS/Nemotron Dictate" \
-  --selftest /Users/abdallah.abdelsameia/Desktop/ai-models/nemotron-asr/assets/test_en.wav
+  --selftest /Users/abdallah.abdelsameia/apps/nemotron-dictate/assets/test_en.wav
 # -> [selftest] The quick brown fox jumps over the lazy dog speech recognition on Apple Silicon is working.
 ```
 
