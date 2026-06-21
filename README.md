@@ -20,6 +20,11 @@ Tap a key, speak, and your words stream into any app — *live*. No cloud, no ac
 
 ---
 
+## 🎥 Demo
+
+> ▶️ Live demo — Arabic ↔ English ↔ French in one breath, streaming as you speak — **coming this week.**
+<!-- when recorded: ![demo](docs/demo.gif) -->
+
 ## Why
 
 Apple's dictation is cloud-tied and clunky. **Nemotron Dictate** replaces it with NVIDIA's
