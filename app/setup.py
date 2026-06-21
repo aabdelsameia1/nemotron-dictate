@@ -42,7 +42,8 @@ OPTIONS = {
     "iconfile": os.path.join(HERE, "AppIcon.icns"),
     # bring in onnx_engine.py as a module (it's at project root)
     "includes": [
-        "onnx_engine",
+        # the packaged app reuses the FULL live experience from live_dictate
+        "onnx_engine", "live_dictate", "live_inject",
         "rumps",
         "pynput", "pynput.keyboard", "pynput.mouse",
         "sounddevice", "_sounddevice_data", "cffi", "_cffi_backend",
@@ -59,9 +60,12 @@ OPTIONS = {
     # The app uses a pure-numpy mel frontend (no librosa). Exclude librosa and its
     # transitive deps (pooch -> lzma -> liblzma dylib) which broke the bundle, plus
     # torch/NeMo and other heavy unused packages, to keep it lean + loadable.
+    # NOTE: stream_engine + torch/NeMo are excluded because the ONNX engine path
+    # never imports them (live_dictate only imports stream_engine when --engine nemo,
+    # and torch only lazily inside _unload's try/except — both no-ops here).
     "excludes": [
         "torch", "torchaudio", "nemo", "nemo_toolkit", "stream_engine",
-        "dictate", "live_dictate", "menubar_dictate", "transformers",
+        "dictate", "menubar_dictate", "transformers",
         "tensorflow", "matplotlib", "pandas", "tkinter", "lightning",
         "pytorch_lightning", "lhotse", "py2app", "PyInstaller",
         "librosa", "pooch", "scipy", "numba", "llvmlite", "audioread",

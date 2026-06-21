@@ -4,6 +4,14 @@ Local, private dictation menu-bar app for macOS. Replaces cloud dictation with
 NVIDIA Nemotron 3.5 ASR running fully on-device via ONNX Runtime (CPU). No audio
 ever leaves the Mac. ONNX-only — does NOT bundle torch / NeMo.
 
+**The packaged app is the FULL live experience** (it wraps `live_dictate.LiveDictateApp`):
+- **Live streaming** — words appear in the focused field AS YOU SPEAK (not record-then-paste).
+- **Glass pill under the notch** — a Dynamic-Island-style "Listening" indicator while recording.
+- **Audio ducking** — other apps' volume gently fades down while you talk, fades back after.
+- **Pause/Resume** + language and ducking settings persisted across restarts.
+The bundle's entry class is `PackagedLiveDictateApp(LiveDictateApp)` (adds first-run download
++ main-thread model load); all the live UX is inherited from `LiveDictateApp`.
+
 ## What gets built
 - `dist/Nemotron Dictate.app` — the app (~433 MB; Python runtime + onnxruntime + numpy + native libs)
 - `dist/Nemotron Dictate.dmg` — drag-to-install disk image (~220 MB compressed)
@@ -51,12 +59,19 @@ The app degrades gracefully if denied (logs it, no crash) and the menu has
 
 ## Using it
 - **Default hotkey (no Karabiner needed): double-tap Right-Command (⌘).**
-  Double-tap → 🔴 recording → double-tap again → ✍️ transcribes → text is typed
-  into whatever app is focused → 🎤 idle.
+  Double-tap → 🔴 glass pill appears under the notch + other audio ducks → speak and
+  the words **stream live** into the focused app → double-tap again → ✍️ finalize → 🎤 idle.
 - Menu also has **Start / Stop (manual)** if you prefer clicking.
+- **Pause (free GPU)** in the menu unloads the model; **Resume** reloads it.
+- **Duck audio while recording** toggle in the menu (on by default).
 - **Language:** menu → Set language → `auto` / `en-US` / `fr-FR` (auto-detects by default).
-- **Optional advanced hotkey (F18 via Karabiner):** if you remap your mic key (F5)
-  to F18 in Karabiner-Elements, the app also triggers on F18. Not required.
+- **Optional advanced hotkey (F18 via Karabiner):** the dev script also supports
+  `--trigger f18`; the packaged app ships with double-tap Right-⌘ so Karabiner is not needed.
+
+## Run the full app from source (dev)
+```bash
+python live_dictate.py --engine onnx --trigger doubletap-rcmd      # same UX as the packaged app
+```
 
 ## Logs / troubleshooting
 - Log file: `~/Library/Application Support/Nemotron Dictate/dictate.log`

@@ -53,6 +53,7 @@ CHUNK_MS = 320
 CHUNK_SAMPLES = MODEL_SR * CHUNK_MS // 1000
 MAX_LISTEN_SECONDS = 120
 DUCK_TO_PERCENT = 0.20   # lower other audio to 20% of current while recording
+DOUBLETAP_WINDOW = 0.40  # two Right-⌘ presses within this many seconds = toggle
 
 SETTINGS_PATH = Path.home() / "Library/Application Support/NemotronDictate/config.json"
 
@@ -302,9 +303,10 @@ class LiveDictateApp(rumps.App):
         self.trigger_name = trigger
         self.device = device
         self._engine_cls = engine_cls
-        _s = _load_settings()                      # remember language + duck across restarts
+        _s = _load_settings()                      # remember language + duck + stop-on-enter
         self.lang = _s.get("lang", lang)
         self.duck_enabled = _s.get("duck", duck)
+        self.stop_on_enter = _s.get("stop_on_enter", True)
 
         self._status = "loading"
         self._lock = threading.Lock()
@@ -323,12 +325,15 @@ class LiveDictateApp(rumps.App):
         self.pause_item = rumps.MenuItem("Pause (free GPU)", callback=self._toggle_pause)
         self.duck_item = rumps.MenuItem("Duck audio while recording", callback=self._toggle_duck)
         self.duck_item.state = 1 if self.duck_enabled else 0
+        self.enter_item = rumps.MenuItem("Stop on Enter", callback=self._toggle_enter)
+        self.enter_item.state = 1 if self.stop_on_enter else 0
         self.menu = [
             self.status_item,
             None,
             rumps.MenuItem("Start / Stop (manual)", callback=lambda _: self._toggle()),
             self.pause_item,
             self.duck_item,
+            self.enter_item,
             self._lang_menu(),
             self.last_item,
             None,
@@ -348,16 +353,25 @@ class LiveDictateApp(rumps.App):
             m.add(rumps.MenuItem(code, callback=self._set_lang))
         return m
 
+    def _persist(self):
+        _save_settings({"lang": self.lang, "duck": self.duck_enabled,
+                        "stop_on_enter": self.stop_on_enter})
+
     def _set_lang(self, sender):
         self.lang = sender.title
-        _save_settings({"lang": self.lang, "duck": self.duck_enabled})
+        self._persist()
         rumps.notification("Nemotron Dictation", "Language",
                            f"Set to {self.lang} — Pause then Resume to apply.")
 
     def _toggle_duck(self, sender):
         self.duck_enabled = not self.duck_enabled
         sender.state = 1 if self.duck_enabled else 0
-        _save_settings({"lang": self.lang, "duck": self.duck_enabled})
+        self._persist()
+
+    def _toggle_enter(self, sender):
+        self.stop_on_enter = not self.stop_on_enter
+        sender.state = 1 if self.stop_on_enter else 0
+        self._persist()
 
     # ---- model load / unload ----
     def _load(self):
@@ -416,9 +430,11 @@ class LiveDictateApp(rumps.App):
         with self._lock:
             st = self._status
         self.title = ICON.get(st, "🎤")
+        trigger_label = ("double-tap Right ⌘" if self.trigger_name == "doubletap_cmd_r"
+                         else f"tap your mic key ({self.trigger_name.upper()})")
         labels = {
             "loading": "Loading model…",
-            "idle": f"Ready — tap your mic key ({self.trigger_name.upper()})",
+            "idle": f"Ready — {trigger_label}",
             "listening": "🔴 Listening… speak; tap to finish",
             "finishing": "✍️ Finalizing…",
             "paused": "Paused — model unloaded (GPU free)",
@@ -443,6 +459,31 @@ class LiveDictateApp(rumps.App):
 
     # ---- hotkey ----
     def _on_press(self, key):
+        # "Stop on Enter": while dictating, Return/Enter auto-finishes the dictation
+        # (types the last words) AND still submits the chat message — one keystroke.
+        # We finalize + type SYNCHRONOUSLY here so the final words land in the field
+        # BEFORE this Enter reaches the app (else the tail would leak into the next
+        # message). We do NOT suppress Enter (suppress=False on the listener), so it
+        # still submits. When not listening, Enter is 100% normal (we do nothing).
+        if (self.stop_on_enter and key in (keyboard.Key.enter, getattr(keyboard.Key, "return", None))):
+            with self._lock:
+                listening = self._status == "listening"
+            if listening:
+                self._stop(sync=True)   # blocking: finishes + types before we return
+            return  # let Enter propagate to submit (suppress=False)
+
+        # Double-tap Right-Command mode (no Karabiner needed): two cmd_r presses
+        # within DOUBLETAP_WINDOW = toggle. Selected via trigger='doubletap_cmd_r'.
+        if self.trigger_name == "doubletap_cmd_r":
+            if key == keyboard.Key.cmd_r:
+                now = time.time()
+                if now - getattr(self, "_last_rcmd_tap", 0.0) < DOUBLETAP_WINDOW:
+                    self._last_rcmd_tap = 0.0
+                    self._toggle()
+                else:
+                    self._last_rcmd_tap = now
+            return
+        # Single-key mode (default: f18 from Karabiner, or any pynput Key name).
         if key == getattr(keyboard.Key, self.trigger_name, None):
             self._toggle()
 
@@ -481,46 +522,90 @@ class LiveDictateApp(rumps.App):
 
     def _stream_loop(self):
         pending = np.zeros(0, dtype=np.float32)
+        # Backlog safety: if decode ever falls behind, DROP the oldest audio instead of
+        # letting `pending` grow unbounded (which would make each feed bigger and wedge
+        # the loop). We cap the backlog at MAX_BACKLOG_S of audio; anything older is
+        # discarded. Per-feed work is already constant (incremental mel), so this is a
+        # belt-and-suspenders guard — it keeps the app responsive no matter what.
+        MAX_BACKLOG = int(MODEL_SR * 3.0)   # keep at most ~3s queued
         while True:
             with self._lock:
                 if self._status != "listening":
                     break
-            pending = np.concatenate([pending, self.mic.drain()])
+            try:
+                pending = np.concatenate([pending, self.mic.drain()])
+            except Exception:
+                break
+            if len(pending) > MAX_BACKLOG:
+                # falling behind -> drop the oldest, keep only the most recent audio
+                pending = pending[-MAX_BACKLOG:]
             if len(pending) >= CHUNK_SAMPLES and self.engine is not None:
-                text = self.engine.feed(pending)
+                try:
+                    text = self.engine.feed(pending)
+                except Exception as e:
+                    print(f"[live] feed error (skipping): {e!r}", flush=True)
+                    text = None
                 pending = np.zeros(0, dtype=np.float32)
                 if text:
                     self.typer.update(text)
             time.sleep(0.05)
 
-    def _stop(self):
+    def _stop(self, sync=False):
+        """Finish dictation — BULLETPROOF: the mic is ALWAYS closed and the app ALWAYS
+        returns to idle, even if the engine is mid-decode/behind or throws. We close the
+        mic FIRST (it can never stay 'orange stuck on'), then best-effort finalize+type,
+        then ALWAYS restore audio + go idle in a finally. When sync=True (Enter path) this
+        runs inline in the key handler so the last words land before Enter submits; a
+        tight worker-join timeout keeps that latency small."""
         with self._lock:
             if self._status != "listening":
                 return
             self._status = "finishing"
             self._listen_started_at = None
-        if self._worker:
-            self._worker.join(timeout=2.0)
-        remaining = self.mic.stop()
-        final = None
+        # 1) ALWAYS close the mic first — never leave the input device open.
+        remaining = None
         try:
-            if self.engine is not None:
-                if remaining is not None and len(remaining):
-                    self.engine.feed(remaining)
-                final = self.engine.finalize()
+            remaining = self.mic.stop()
         except Exception as e:
-            print(f"[live] finalize error: {e!r}", flush=True)
-        if final:
-            self.typer.update(final)
-            self.last_item.title = f"Last: {(final[:40] + '…') if len(final) > 40 else final}"
-            print(f"[live] -> \"{final}\"", flush=True)
-        self.typer.reset()
-        # restore audio — gradual fade up so it doesn't blast the ears
-        if self.duck_enabled and self._saved_vol is not None:
-            _fade_volume(self._saved_vol * DUCK_TO_PERCENT, self._saved_vol, duration=0.8)
-            self._saved_vol = None
-        with self._lock:
-            self._status = "idle"
+            print(f"[live] mic.stop error (ignored): {e!r}", flush=True)
+        # 2) stop the worker (bounded wait; we already closed the mic, so even if it
+        #    overruns the device is released).
+        if self._worker:
+            try:
+                self._worker.join(timeout=0.3 if sync else 1.5)
+            except Exception:
+                pass
+        try:
+            # 3) best-effort finalize + type the last words.
+            final = None
+            try:
+                if self.engine is not None:
+                    if remaining is not None and len(remaining):
+                        self.engine.feed(remaining)
+                    final = self.engine.finalize()
+            except Exception as e:
+                print(f"[live] finalize error (ignored): {e!r}", flush=True)
+            if final:
+                try:
+                    self.typer.update(final)
+                    self.last_item.title = f"Last: {(final[:40] + '…') if len(final) > 40 else final}"
+                    print(f"[live] -> \"{final}\"", flush=True)
+                except Exception as e:
+                    print(f"[live] type error (ignored): {e!r}", flush=True)
+            try:
+                self.typer.reset()
+            except Exception:
+                pass
+        finally:
+            # 4) ALWAYS restore audio + return to idle, no matter what happened above.
+            if self.duck_enabled and self._saved_vol is not None:
+                try:
+                    _fade_volume(self._saved_vol * DUCK_TO_PERCENT, self._saved_vol, duration=0.8)
+                except Exception:
+                    pass
+                self._saved_vol = None
+            with self._lock:
+                self._status = "idle"
 
     # ---- quit ----
     def _quit(self, _):
@@ -574,7 +659,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--engine", default="onnx", choices=["onnx", "nemo"],
                     help="onnx = ~2s load, CPU, frees the GPU (default); nemo = MPS, best accuracy")
-    ap.add_argument("--trigger", default="f18", help="pynput Key name (default f18 from Karabiner)")
+    ap.add_argument("--trigger", default="f18",
+                    help="'doubletap-rcmd' (double-tap Right-⌘, no Karabiner) or a pynput Key "
+                         "name like f18 (default, from Karabiner)")
     ap.add_argument("--device", default=None, choices=["mps", "cpu"], help="override the engine's default device")
     ap.add_argument("--lang", default="auto")
     ap.add_argument("--no-duck", action="store_true", help="disable audio ducking")
@@ -592,7 +679,10 @@ def main():
         selftest(args.selftest, device, args.lang, EngineCls)
         return
 
-    LiveDictateApp(trigger=args.trigger, device=device, lang=args.lang,
+    # accept the hyphenated CLI form and normalize to the internal trigger name
+    trigger = "doubletap_cmd_r" if args.trigger in ("doubletap-rcmd", "doubletap_cmd_r") else args.trigger
+
+    LiveDictateApp(trigger=trigger, device=device, lang=args.lang,
                    duck=not args.no_duck, engine_cls=EngineCls).run()
 
 

@@ -1,71 +1,104 @@
+<div align="center">
+
+<img src="app/AppIcon.iconset/icon_256x256.png" width="120" alt="Nemotron Dictate"/>
+
 # Nemotron Dictate
 
-Local, real-time dictation for macOS (Apple Silicon) that replaces Apple's built-in
-dictation with NVIDIA's **`nemotron-3.5-asr-streaming-0.6b`**. Fully offline — audio
-never leaves the machine. English + French (auto-detected).
+**Local, real-time dictation for macOS — powered by NVIDIA Nemotron, 100% on-device.**
 
-Tap your mic key → speak → words stream into whatever app is focused, **live**.
+Tap a key, speak, and your words stream into any app — *live*. No cloud, no account, no audio ever leaves your Mac.
 
-## Features
-- **Real-time streaming** transcription (cache-aware NeMo, ~0.11 RTF on MPS — 4–9× real-time)
-- **Pure-append** output → live typing with zero backspacing/glitches
-- **Floating indicator** — a glass pill under the notch, on whichever screen you're using
-- **Audio ducking** — lowers other apps' volume while you talk, fades it back gently
-- **Pause / Resume** — unloads the model (GPU → 0 MB) to free the GPU for other work
-- **Remembers settings** (language, ducking) across restarts; **error popups** on mic/model failure
-- **Menu-bar app**, runs from a LaunchAgent so it loads once at login (no terminal) + auto-restarts on crash
+![Platform](https://img.shields.io/badge/platform-macOS%20·%20Apple%20Silicon-black?logo=apple)
+![Python](https://img.shields.io/badge/python-3.11-blue?logo=python&logoColor=white)
+![Engine](https://img.shields.io/badge/engine-ONNX%20Runtime-005CED)
+![Model](https://img.shields.io/badge/model-nemotron--3.5--asr--streaming-76B900)
+![Latency](https://img.shields.io/badge/RTF-0.07%20(14×%20real--time)-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Requirements
-- Apple Silicon Mac, macOS 13+
-- ~2.6 GB free memory while running; ~2.4 GB disk for the model
-- [Karabiner-Elements](https://karabiner-elements.pqrs.org/) to map the mic key (F5 🎤) → F18
+</div>
 
-## Quick start
-```bash
-# 1. create the env (uv) and install deps
-uv venv && uv pip install -r requirements.txt    # NeMo is installed from git (see requirements.txt)
+---
 
-# 2. run the live menu-bar app (production trigger = F18 from Karabiner)
-./.venv/bin/python live_dictate.py
+## Why
 
-# testing without Karabiner (uses Right Option as the trigger):
-./.venv/bin/python live_dictate.py --trigger alt_r --lang auto
+Apple's dictation is cloud-tied and clunky. **Nemotron Dictate** replaces it with NVIDIA's
+`nemotron-3.5-asr-streaming-0.6b` running **fully offline** on Apple Silicon — English + French,
+real-time, typing straight into whatever app you're in.
 
-# transcribe a file instead:
-./.venv/bin/python run.py --audio some.wav --lang fr-FR --device mps --out out.txt
+## ✨ Features
+
+- ⚡ **Real-time streaming** — words appear *as you speak* (~0.07 RTF, ~14× faster than real-time)
+- 🔒 **100% local & private** — ONNX Runtime on CPU; audio never leaves your Mac; your GPU stays free
+- 🎯 **Pure-append typing** — no flicker, never backspaces into your text
+- 🟢 **Notch pill** — a frosted-glass "Listening" indicator under the notch, on whichever screen you're using
+- 🔉 **Audio ducking** — gently lowers other apps' volume while you talk, fades it back when you finish
+- ⏎ **One-key finish** — press **Enter** to stop *and* send in a single keystroke
+- ⏸️ **Pause/Resume** — unload the model to free RAM whenever you want
+- 🇬🇧🇫🇷 **English + French** (auto-detected) — accents and apostrophes intact
+
+## ⬇️ Install
+
+1. Download **`Nemotron Dictate.dmg`** from the [**Releases**](../../releases) page
+2. Open it → drag the app into **Applications**
+3. **Right-click → Open** (the app is unsigned — a one-time macOS Gatekeeper step)
+4. Grant **Microphone**, **Accessibility**, and **Input Monitoring** when prompted
+5. First launch downloads the model (~2.4 GB, one time) → you're set
+
+> **Note:** because the app isn't notarized, macOS warns on first open — *right-click → Open* gets past it. A one-click notarized installer would need an Apple Developer ID.
+
+## ⌨️ Use
+
+| Action | Keys |
+|---|---|
+| Start dictating | **double-tap Right ⌘** |
+| Stop **and** send | **Enter** |
+| Just stop | double-tap Right ⌘ again |
+| Language / Pause / settings | menu-bar **🎤** |
+
+Speak → words stream into the focused app → Enter to send. That's it.
+
+## 🧠 How it works
+
+```
+mic ─16kHz→ incremental mel ─→ ONNX encoder + RNNT decoder (cache-aware streaming)
+                                          │  growing transcript (pure-append)
+                                          ▼
+                              live typer ─→ types only the delta into the focused app
 ```
 
-## Engines (pick with `--engine`)
-| Engine | Default? | Load | Device | Accuracy | Notes |
-|---|---|---|---|---|---|
-| **onnx** | ✅ default | **~2s** | CPU | identical on short utterances, ~99% long | frees the GPU → run it alongside GPU apps (HyperRead) with no conflict |
-| **nemo** | `--engine nemo` | ~20s | MPS | slightly higher (long files) | the original PyTorch/NeMo path; best for long-form / max accuracy |
+- **Cache-aware streaming** RNNT — true low-latency, constant per-chunk work (incremental mel, no O(N²) re-processing)
+- **ONNX Runtime (CPU)** — no PyTorch/NeMo at runtime; ~2 s cold start; leaves the GPU for other apps
+- **Bulletproof mic handling** — opened only while recording, always released cleanly
+
+## 🛠️ Build from source
 
 ```bash
-./.venv/bin/python live_dictate.py                 # onnx (fast, CPU) — default
-./.venv/bin/python live_dictate.py --engine nemo   # NeMo (MPS, max accuracy)
+uv venv && uv pip install -r requirements.txt
+# run the dev menu-bar app
+./.venv/bin/python live_dictate.py                 # ONNX engine (default)
+./.venv/bin/python live_dictate.py --engine nemo   # NeMo/MPS (max accuracy, dev only)
+# package the .app + .dmg
+./.venv/bin/python app/build_app.py
 ```
-ONNX weights (gitignored, ~2.4 GB) live in `onnx_weights/` — download the export
-`altunenes/parakeet-rs :: nemotron-3.5-asr-streaming-0.6b-onnx` from Hugging Face into that folder.
 
-See **[DICTATION_SETUP.md](DICTATION_SETUP.md)** for the full setup (Karabiner remap,
-turning off Apple dictation, permissions, always-on LaunchAgent).
-
-## Files
 | File | What |
 |---|---|
-| `live_dictate.py` | the main app — real-time streaming + pill + ducking + pause |
-| `stream_engine.py` | NeMo cache-aware streaming engine (`StreamingTranscriber`, MPS) |
-| `onnx_engine.py` | ONNX Runtime streaming engine — same model, CPU, ~2s load (default) |
+| `app/nemotron_dictate_app.py` | packaged app entry (subclasses the live app, adds first-run download) |
+| `live_dictate.py` | the menu-bar app — streaming, notch pill, ducking, pause, Enter-to-stop |
+| `onnx_engine.py` | ONNX Runtime streaming engine (default; incremental mel) |
+| `stream_engine.py` | NeMo/MPS streaming engine (dev / max accuracy) |
 | `live_inject.py` | delta-typer (diffs growing text → minimal keystrokes) |
-| `menubar_dictate.py` | older batch app (tap-record-then-paste) |
-| `dictate.py` | push-to-talk daemon + shared recorder/model/inject |
 | `run.py` | file → text transcriber |
-| `QUIRKS.md` | logged anomalies + fixes |
+| `app/DISTRIBUTION.md` · `DICTATION_SETUP.md` | packaging + setup guides |
 
-## Notes
-- Streaming requires **float32** (NeMo's streaming path rejects fp16). It's still
-  comfortably real-time on MPS.
-- License of the model: **OpenMDW-1.1** (open).
+## 🙏 Credits
 
-🤖 Built with [Claude Code](https://claude.com/claude-code)
+- **Model:** [NVIDIA `nemotron-3.5-asr-streaming-0.6b`](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b) — license **OpenMDW-1.1**
+- **ONNX export:** [`altunenes/parakeet-rs`](https://huggingface.co/altunenes)
+- Built with ONNX Runtime · rumps · pynput · sounddevice
+
+## 📄 License
+
+Code: **MIT** (see [LICENSE](LICENSE)). The model ships under its own license (OpenMDW-1.1).
+
+<div align="center"><sub>Made on a Mac, for Macs. 🖥️</sub></div>

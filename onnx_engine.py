@@ -155,6 +155,129 @@ class MelFrontend:
         return mel[np.newaxis, :, :]                             # [1, n_mels, T]
 
 
+class IncrementalMel:
+    """Stateful log-mel that yields the SAME frames as MelFrontend over the cumulative
+    stream, but in CONSTANT time per push (no O(N^2) re-extraction).
+
+    How it stays bit-identical to the batch frontend (center=True, reflect pad n_fft//2):
+      * frame i is centered at sample i*hop, covering original samples [i*hop-256, i*hop+256).
+      * preemphasis y[t]=x[t]-0.97*x[t-1] is applied continuously (we keep the last raw
+        sample across pushes; y[0] of the whole stream keeps x[0] as-is, matching batch).
+      * we keep a tail of preemphasised samples long enough to form the next frames, plus a
+        flag for whether the left reflect-pad (start of stream) has been emitted yet.
+      * a frame is only emitted once its RIGHT edge (i*hop+256) is covered by real samples,
+        so mid-stream frames equal the batch result exactly. At finalize() we apply the
+        right reflect-pad and flush the final frames.
+    """
+    def __init__(self, mel: "MelFrontend"):
+        self.m = mel
+        self.reset()
+
+    def reset(self):
+        self._last_raw = None          # last raw sample (for continuous preemphasis)
+        self._pre = np.zeros(0, dtype=np.float64)  # preemphasised samples not yet consumed
+        self._pre_origin = 0           # original-sample index of self._pre[0]
+        self._emitted = 0              # number of mel frames already produced
+        self._started = False          # has the left reflect-pad been applied?
+
+    def _preemph_push(self, seg):
+        """Append raw seg -> return the new preemphasised samples (continuous)."""
+        seg = np.asarray(seg, dtype=np.float64)
+        if seg.size == 0:
+            return np.zeros(0, dtype=np.float64)
+        p = self.m.preemph
+        if self._last_raw is None:
+            out = np.empty(seg.size, dtype=np.float64)
+            out[0] = seg[0]            # first sample of the whole stream: as-is (batch match)
+            out[1:] = seg[1:] - p * seg[:-1]
+        else:
+            out = seg - p * np.concatenate([[self._last_raw], seg[:-1]])
+        self._last_raw = float(seg[-1])
+        return out
+
+    def _frames_from(self, sig_left_padded, base_origin, up_to_right_edge):
+        """STFT->mel for all frames whose center i*hop has left>=0 and right edge<=avail.
+        sig_left_padded: preemphasised samples with the left reflect-pad already prepended
+        if this is the very start; base_origin: original index of sig_left_padded[0] minus
+        the left pad offset. Returns (mel[1,n_mels,K], next_frame_index)."""
+        m = self.m
+        # window padded to n_fft (centered)
+        if m.win_length < m.n_fft:
+            pl = (m.n_fft - m.win_length) // 2
+            win = np.zeros(m.n_fft, dtype=np.float64)
+            win[pl:pl + m.win_length] = m.window
+        else:
+            win = m.window.astype(np.float64)
+        frames = []
+        i = self._emitted
+        while True:
+            center = i * m.hop                    # original-sample center of frame i
+            left = center - m.n_fft // 2          # original index of frame start
+            right = left + m.n_fft                # exclusive end
+            if right > up_to_right_edge:
+                break                              # not enough lookahead yet -> hold back
+            s = left - base_origin
+            seg = sig_left_padded[s:s + m.n_fft]
+            if seg.size < m.n_fft:
+                break
+            frames.append(seg)
+            i += 1
+        if not frames:
+            return np.zeros((1, m.n_mels, 0), dtype=np.float32), i
+        F = np.stack(frames, axis=0) * win[None, :]
+        spec = np.fft.rfft(F, n=m.n_fft, axis=1).T          # [freqs, K]
+        power = (np.abs(spec) ** 2).astype(np.float32)
+        mel = (m.mel_fb @ power)
+        mel = np.log(mel + m.log_guard).astype(np.float32)
+        return mel[np.newaxis, :, :], i
+
+    def push(self, seg, is_final=False):
+        """Push new raw audio. Returns newly-finalized mel frames [1, n_mels, K]
+        (K may be 0 if not enough lookahead yet)."""
+        m = self.m
+        new_pre = self._preemph_push(seg)
+        if new_pre.size:
+            self._pre = np.concatenate([self._pre, new_pre])
+        # build the analysis signal with the left reflect-pad prepended ONCE at the start
+        if not self._started:
+            pad = m.n_fft // 2
+            # reflect pad uses samples 1..pad of the (preemphasised) stream
+            if self._pre.size > pad:
+                left_pad = self._pre[1:pad + 1][::-1]
+            else:
+                left_pad = np.zeros(0, dtype=np.float64)
+            sig = np.concatenate([left_pad, self._pre])
+            base_origin = -left_pad.size
+        else:
+            sig = self._pre
+            base_origin = self._pre_origin
+
+        if is_final:
+            # apply the right reflect-pad so the trailing frames match the batch result
+            pad = m.n_fft // 2
+            total_len = self._pre_origin + self._pre.size if self._started else self._pre.size
+            if self._pre.size > pad:
+                right_pad = self._pre[-pad - 1:-1][::-1]
+            else:
+                right_pad = np.zeros(0, dtype=np.float64)
+            sig = np.concatenate([sig, right_pad])
+            avail_right = total_len + pad
+        else:
+            total_len = self._pre_origin + self._pre.size if self._started else self._pre.size
+            avail_right = total_len   # no right pad mid-stream
+
+        mel, next_i = self._frames_from(sig, base_origin, avail_right)
+        self._started = True
+        self._emitted = next_i
+        # trim consumed preemphasised samples we'll never need again: keep enough tail to
+        # form the next frame's left edge (next_i*hop - n_fft//2) onward.
+        keep_from = max(0, next_i * m.hop - m.n_fft // 2 - self._pre_origin)
+        if keep_from > 0:
+            self._pre = self._pre[keep_from:]
+            self._pre_origin += keep_from
+        return mel
+
+
 # --------------------------------------------------------------------------- #
 #  Streaming transcriber                                                      #
 # --------------------------------------------------------------------------- #
@@ -194,6 +317,11 @@ class StreamingTranscriber:
 
         self.mel = MelFrontend(self.cfg)
 
+        # word-boundary-space repair: the lone '▁' token id + how competitive it must
+        # be (in logit units below the argmax) to be reinstated at a chunk boundary.
+        self._lone_space_id = self.sp.piece_to_id("▁")
+        self._space_repair_margin = 6.0
+
         # Authoritative chunk grid from the export author (parakeet-rs nemotron.rs):
         #   CHUNK_SIZE = 56 mel frames (the new audio per step)
         #   PRE_ENCODE_CACHE = 9 mel frames of left context prepended each step
@@ -206,8 +334,11 @@ class StreamingTranscriber:
 
     # ------------------------------------------------------------------ #
     def reset(self):
-        self._raw = np.zeros(0, dtype=np.float32)
-        self._mel_done = 0  # mel frames already consumed
+        self._raw = np.zeros(0, dtype=np.float32)  # kept only for compatibility; unused for mel
+        self._mel_done = 0  # mel frames already consumed (index into self._mel_buf)
+        # incremental mel cache: constant work per feed (no O(N^2) re-extraction).
+        self._inc_mel = IncrementalMel(self.mel)
+        self._mel_buf = np.zeros((1, self.cfg["n_mels"], 0), dtype=np.float32)  # all mel frames so far
         # encoder caches (initial = zeros, shapes from config)
         cs = self.cfg["cache_shapes"]
         self._c_chan = np.zeros(cs["cache_last_channel"], dtype=np.float32)
@@ -217,6 +348,7 @@ class StreamingTranscriber:
         self._dstate1 = np.zeros((2, 1, 640), dtype=np.float32)
         self._dstate2 = np.zeros((2, 1, 640), dtype=np.float32)
         self._tokens = []          # decoded token ids (no blanks)
+        self._chunk_starts = []    # token-list index where each new encoder chunk began
         self._last_token = self.blank_id
         self._last_text = ""
         self._step = 0
@@ -255,9 +387,12 @@ class StreamingTranscriber:
         """RNNT greedy over encoder time steps. encoded: [1, 1024, T_enc]."""
         T = enc_len
         max_symbols = 10
+        self._chunk_starts.append(len(self._tokens))
+        first_frame_of_chunk = True
         for t in range(T):
             f = encoded[:, :, t:t + 1]  # [1,1024,1] -> joint expects [B, D, T]=1
             emitted = 0
+            first_symbol_of_frame = True
             while emitted < max_symbols:
                 targets = np.array([[self._last_token]], dtype=np.int32)
                 tlen = np.array([1], dtype=np.int32)
@@ -269,24 +404,163 @@ class StreamingTranscriber:
                     "input_states_2": self._dstate2,
                 }
                 logits, _plen, s1, s2 = self.dec.run(None, dec_in)
-                # logits: [1,1,1,13088]
-                logit = logits[0, 0, 0]
+                logit = logits[0, 0, 0]                     # [13088]
                 tok = int(np.argmax(logit))
+
+                # --- word-boundary-space repair (uses the model's OWN logits) ---
+                # The RNNT occasionally drops the lone '▁' word-boundary token at a
+                # chunk boundary, sticking words ('thing matters' -> 'thingmatters').
+                # At the FIRST symbol of the FIRST frame of a new chunk, if it is about
+                # to emit a bare subword (no '▁') right after a token that COMPLETED a
+                # word, but the lone '▁' (id 2) is a strong contender in the logits,
+                # the model "wanted" the space — so emit '▁' first (the natural two-token
+                # pattern). This is SAFE: mid-word continuations (e.g. 'beautiful' split
+                # ▁be|au) leave the '▁' logit LOW because the model knows it's mid-word,
+                # so this never splits a real word — the acoustics/logits disambiguate
+                # what the token surface alone cannot.
+                if (first_frame_of_chunk and first_symbol_of_frame
+                        and tok != self.blank_id and tok != self._lone_space_id
+                        and not self.sp.id_to_piece(tok).startswith("▁")
+                        and self._prev_completed_word()):
+                    sp_logit = float(logit[self._lone_space_id])
+                    best_logit = float(logit[tok])
+                    blank_logit = float(logit[self.blank_id])
+                    # require '▁' to be a genuinely competitive, top candidate
+                    if sp_logit >= best_logit - self._space_repair_margin and sp_logit > blank_logit:
+                        self._dstate1, self._dstate2 = s1, s2
+                        self._last_token = self._lone_space_id
+                        self._tokens.append(self._lone_space_id)
+                        first_symbol_of_frame = False  # next loop emits the real subword
+                        continue
+
+                first_symbol_of_frame = False
                 if tok == self.blank_id:
                     break
-                # accept token: advance prediction-net state + history
                 self._dstate1, self._dstate2 = s1, s2
                 self._last_token = tok
                 self._tokens.append(tok)
                 emitted += 1
-        text = self.sp.decode(self._tokens)
-        return text
+            first_frame_of_chunk = False
+        return self._decode_tokens()
 
-    def _decode_new(self, is_final: bool) -> str:
-        if len(self._raw) == 0:
-            return _strip_tags(self._last_text)
-        feats = self.mel(self._raw)          # [1, n_mels, T_total] over the whole stream
-        T = feats.shape[-1]
+    def _prev_completed_word(self):
+        """True if the last accepted token ended a complete word (so a new word — and
+        thus a boundary space — is plausible). A '▁'-prefixed token that is itself a
+        whole word, or the end of a word group, completes a word; a bare subword that
+        is clearly mid-word does not. We approximate: the running surface so far ends
+        on a token whose piece, re-encoded as a standalone word, is a full word."""
+        if not self._tokens:
+            return False
+        # decode the tail word group and check it round-trips as a complete word
+        sp = self.sp
+        j = len(self._tokens) - 1
+        while j >= 0 and not sp.id_to_piece(self._tokens[j]).startswith("▁"):
+            j -= 1
+        if j < 0:
+            return False
+        word = sp.decode(list(self._tokens[j:])).strip()
+        if not word or not word[-1].isalpha():
+            return True   # ended on punctuation/space → definitely a boundary
+        # complete if SP re-tokenizes the standalone word to the same tail pieces
+        re_ids = sp.encode(word)
+        emitted_tail = [sp.id_to_piece(t) for t in self._tokens[j:]]
+        re_pieces = [sp.id_to_piece(t) for t in re_ids]
+        return re_pieces == emitted_tail
+
+    def _decode_tokens(self):
+        """Decode the accumulated tokens to text, REPAIRING word-boundary spaces that
+        the RNNT occasionally drops across a chunk boundary.
+
+        Bug: this vocab tokenizes many words as a lone '▁' (space) token + bare
+        subwords (e.g. 'matters' = ['▁','ma','t','ter','s']). At a chunk boundary the
+        prediction-net sometimes fails to emit that lone '▁', so sp.decode joins the
+        words ('thing matters' -> 'thingmatters'). We detect this ONLY at recorded
+        chunk-start indices (self._chunk_starts) and ONLY when the first token of the
+        new chunk is a *complete word piece on its own* ('▁X' is fine; the danger is a
+        bare subword that should have begun a fresh word). We never touch tokens inside
+        a chunk, so legitimate intra-word subwords ('beautiful' = ▁be+au+ti+ful, all in
+        one chunk) are untouched.
+
+        Repair test (per boundary b): take the bare first-token of the chunk and ask SP
+        whether it more plausibly STARTS A NEW WORD. We compare two reconstructions of
+        the boundary word-group and pick the one SentencePiece itself would produce.
+        """
+        toks = self._tokens
+        if not toks:
+            return ""
+        starts = set(i for i in self._chunk_starts if 0 < i < len(toks))
+        sp = self.sp
+        out = []           # list of decoded text fragments
+        # We walk token by token, decoding incrementally so we can inject a boundary
+        # space at the right place. Build the final string from per-token pieces with
+        # SP's own surface form (id_to_piece, '▁' -> space).
+        for i, t in enumerate(toks):
+            piece = sp.id_to_piece(t)
+            text_piece = piece.replace("▁", " ")  # ▁ -> space
+            if i in starts and piece and not piece.startswith("▁"):
+                # first token of a NEW chunk and it has no leading space marker.
+                # If the text so far ends with a letter (mid-word) AND adding this bare
+                # piece would have been the model's intent, we must decide: continue the
+                # word, or it lost a boundary space. Use SP to disambiguate.
+                if self._boundary_lost_space(toks, i):
+                    text_piece = " " + text_piece
+            out.append(text_piece)
+        # join and clean: collapse any accidental double spaces, strip leading space
+        s = "".join(out)
+        while "  " in s:
+            s = s.replace("  ", " ")
+        return s.lstrip()
+
+    def _boundary_lost_space(self, toks, i):
+        """Decide whether the bare subword token at chunk-boundary index i lost its
+        word-boundary space — SAFELY (never split a legitimately-continued word).
+
+        Hard truth about this vocab: the token surface is genuinely AMBIGUOUS between
+        a lost space and an intra-word continuation. e.g. emitted ['▁thing','ma','t',
+        'ter','s'] is exactly how SentencePiece tokenizes BOTH 'thing matters' (space
+        lost) AND the single string 'thingmatters'. Likewise ['▁be','au','ti','ful']
+        is 'beautiful' (one word) and we must NOT split it.
+
+        So we only repair when it is UNAMBIGUOUS: the join is *unnatural* — i.e. when
+        SentencePiece, asked to tokenize the two surfaces JOINED into one string, would
+        NOT reproduce the emitted pieces (so the model could not have meant one word),
+        WHILE the SEPARATED tokenization (with a boundary ▁) reproduces them exactly.
+        In the ambiguous 'joined == emitted' case we leave it alone (no corruption).
+        This fixes the clearly-broken joins and never breaks a real word.
+        """
+        sp = self.sp
+        # previous word group: walk back to the last '▁' marker (inclusive)
+        j = i - 1
+        while j >= 0 and not sp.id_to_piece(toks[j]).startswith("▁"):
+            j -= 1
+        if j < 0:
+            return False
+        left_ids = list(toks[j:i])
+        # bare run at the boundary: up to the next '▁' or chunk end
+        k = i + 1
+        while k < len(toks) and not sp.id_to_piece(toks[k]).startswith("▁"):
+            k += 1
+        right_ids = list(toks[i:k])
+        left_word = sp.decode(left_ids).strip()
+        right_word = sp.decode(right_ids).strip()
+        if not left_word or not right_word:
+            return False
+        emitted = [sp.id_to_piece(t) for t in (left_ids + right_ids)]
+        joined = [sp.id_to_piece(t) for t in sp.encode(left_word + right_word)]
+        separated = [sp.id_to_piece(t) for t in sp.encode(left_word + " " + right_word)]
+        emitted_with_space = (emitted[:len(left_ids)]
+                              + ["▁" + emitted[len(left_ids)].lstrip("▁")]
+                              + emitted[len(left_ids) + 1:])
+        # unambiguous lost space: separated reproduces it, joined does NOT.
+        return separated == emitted_with_space and joined != emitted
+
+    def _decode_new(self, seg, is_final: bool) -> str:
+        # extend the mel buffer with ONLY the new audio (constant work per feed -- the
+        # incremental mel never re-extracts the whole stream, killing the O(N^2) pegging).
+        new_mel = self._inc_mel.push(seg, is_final=is_final)
+        if new_mel.shape[-1]:
+            self._mel_buf = np.concatenate([self._mel_buf, new_mel], axis=-1)
+        T = self._mel_buf.shape[-1]
         cf = self._chunk_mel_frames          # 56 new frames per chunk
         pre = self._pre_cache_mel            # 9 left-context frames
         avail = T - self._mel_done
@@ -296,11 +570,11 @@ class StreamingTranscriber:
         # process: each step takes [9 left-context] + [56 new] = 65 frames.
         pos = self._mel_done
         end_frames = self._mel_done + (avail if is_final else n_full * cf)
+        feats = self._mel_buf
         while pos < end_frames:
             new_end = min(pos + cf, end_frames)
             cache_start = max(0, pos - pre)
             mel_chunk = feats[:, :, cache_start:new_end]
-            # zero-pad the head if we have fewer than `pre` context frames (first chunk)
             have_pre = pos - cache_start
             if have_pre < pre:
                 pad = np.zeros((1, mel_chunk.shape[1], pre - have_pre), dtype=np.float32)
@@ -312,7 +586,7 @@ class StreamingTranscriber:
             self._step += 1
             pos = new_end
         self._mel_done = end_frames
-        self._last_text = self.sp.decode(self._tokens)
+        self._last_text = self._decode_tokens()
         return _strip_tags(self._last_text)
 
     # ------------------------------------------------------------------ #
@@ -320,11 +594,16 @@ class StreamingTranscriber:
         if audio_f32_16k is None or len(audio_f32_16k) == 0:
             return _strip_tags(self._last_text)
         seg = np.asarray(audio_f32_16k, dtype=np.float32).reshape(-1)
-        self._raw = np.concatenate([self._raw, seg])
-        return self._decode_new(is_final=False)
+        return self._decode_new(seg, is_final=False)
 
     def finalize(self) -> str:
-        return self._decode_new(is_final=True)
+        # append ONE trailing space so back-to-back dictations don't abut
+        # ("hello"+"world" -> "hello world"). It's a clean append for the live typer
+        # (0 backspaces) and collapses naturally if the field already has a space.
+        text = self._decode_new(np.zeros(0, dtype=np.float32), is_final=True)
+        if text and not text.endswith(" "):
+            text = text + " "
+        return text
 
 
 # ===================================================================== #
