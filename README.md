@@ -12,6 +12,7 @@ Tap a key, speak, and your words stream into any app — *live*. No cloud, no ac
 ![Python](https://img.shields.io/badge/python-3.11-blue?logo=python&logoColor=white)
 ![Engine](https://img.shields.io/badge/engine-ONNX%20Runtime-005CED)
 ![Model](https://img.shields.io/badge/model-nemotron--3.5--asr--streaming-76B900)
+![Languages](https://img.shields.io/badge/languages-40%2B%20·%20code--switching-orange)
 ![Latency](https://img.shields.io/badge/RTF-0.07%20(14×%20real--time)-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -22,8 +23,8 @@ Tap a key, speak, and your words stream into any app — *live*. No cloud, no ac
 ## Why
 
 Apple's dictation is cloud-tied and clunky. **Nemotron Dictate** replaces it with NVIDIA's
-`nemotron-3.5-asr-streaming-0.6b` running **fully offline** on Apple Silicon — English + French,
-real-time, typing straight into whatever app you're in.
+`nemotron-3.5-asr-streaming-0.6b` running **fully offline** on Apple Silicon — **40+ languages
+with live code-switching**, real-time, typing straight into whatever app you're in.
 
 ## ✨ Features
 
@@ -34,7 +35,7 @@ real-time, typing straight into whatever app you're in.
 - 🔉 **Audio ducking** — gently lowers other apps' volume while you talk, fades it back when you finish
 - ⏎ **One-key finish** — press **Enter** to stop *and* send in a single keystroke
 - ⏸️ **Pause/Resume** — unload the model to free RAM whenever you want
-- 🇬🇧🇫🇷 **English + French** (auto-detected) — accents and apostrophes intact
+- 🌍 **40+ languages with live code-switching** — Arabic, English, French, German, Spanish, Chinese, Hindi, Japanese… auto-detected, switch mid-sentence, scripts & accents intact
 
 ## ⬇️ Install
 
